@@ -1,11 +1,11 @@
 # Dataset and Loader Configuration
-dataset_path: "dataset"
+dataset_path: "dataset_pt"
 horizon: 16
-max_path_length: 73000
-batch_size: 128
+max_path_length: 20000
+batch_size: 256
 
 # Model Configuration
-dim: 16
+dim: 16   #64 for manip
 attention: false
 dim_mults: [1, 2, 4, 8]
 
@@ -25,7 +25,7 @@ prefetch_batches: 2
 seed: 0
 
 # Logging and Checkpointing Configuration
-workdir: "checkpoints"
+workdir: "checkpoints_pt"
 log_every: 100
 save_every: 2000
 resume: false

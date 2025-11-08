@@ -58,7 +58,7 @@ def create_train_state(
     )
     # Initialize model parameters
     params = diffusion.model_def.init(rng, sample_x, sample_cond, sample_time)["params"]
-    zero_grad = jax.tree_map(jnp.zeros_like, params)
+    zero_grad = jax.tree.map(jnp.zeros_like, params)
 
     loss_fn = lambda params, rng, x, cond, mask: diffusion.p_loss(
         rng, x, cond, mask, params

@@ -1,127 +1,144 @@
+#!/usr/bin/env python3
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import sys
 import jax.numpy as jnp
 import numpy as np
+if not hasattr(np, 'float'):
+    np.float = float
 
-import rospy
+import rclpy
+from rclpy.node import Node
+from rclpy.task import Future
+from rclpy.duration import Duration
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 
 from sensor_msgs.msg import Imu
 
 # 3D point & Stamped Pose msgs
 from geometry_msgs.msg import Point, PoseStamped, TwistStamped, Vector3
-import tf.transformations as transformations
-from tf.transformations import *
+import tf_transformations as transformations
+from tf_transformations import *
 
 # import all mavros messages and services
 from mavros_msgs.msg import *
-from mavros_msgs.srv import *
+from mavros_msgs.srv import CommandTOL, CommandBool, SetMode
 from nav_msgs.msg import *
 from trajectory_msgs.msg import MultiDOFJointTrajectory as Mdjt
 from std_msgs.msg import Float32
-from gazebo_msgs.msg import ModelStates
-from msg_check.msg import PlotDataMsg
+# from gazebo_msgs.msg import ModelStates
+# from msg_check.msg import PlotDataMsg
 
-from diffusion.diffusion_inference import Policy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+
+# from diffusion.diffusion_inference import Policy
 
 
 class fcuModes:
-    def __init__(self):
-        pass
+    """
+    Minimal ROS2-compatible conversion of your fcuModes service wrappers.
+    This class requires a rclpy.node.Node instance to create clients.
+    """
+
+    def __init__(self, node: Node):
+        self.node = node
+        self._cbg = ReentrantCallbackGroup()
+
+    def _call_service_sync(self, client, req):
+        # Wait for service
+        if not client.wait_for_service(timeout_sec=5.0):
+            # try waiting longer if not available
+            self.node.get_logger().warn(f"Service {client.srv_name} not available yet.")
+            if not client.wait_for_service(timeout_sec=10.0):
+                raise RuntimeError(f"Service {client.srv_name} not available.")
+
+        fut = client.call_async(req)
+        # spin until result is ready
+        rclpy.spin_until_future_complete(self.node, fut)
+        if fut.result() is None:
+            raise RuntimeError(f"Service call {client.srv_name} failed or returned None.")
+        return fut.result()
 
     def setTakeoff(self):
-        rospy.wait_for_service("mavros/cmd/takeoff")
+        client = self.node.create_client(CommandTOL, "mavros/cmd/takeoff", callback_group=self._cbg)
+        req = CommandTOL.Request()
+        req.altitude = 3.0
         try:
-            takeoffService = rospy.ServiceProxy(
-                "mavros/cmd/takeoff", mavros_msgs.srv.CommandTOL
-            )
-            takeoffService(altitude=3)
-        except rospy.ServiceException as e:
-            print("Service takeoff call failed: %s" % e)
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"Service takeoff call failed: {e}")
 
     def setArm(self):
-        rospy.wait_for_service("mavros/cmd/arming")
+        client = self.node.create_client(CommandBool, "mavros/cmd/arming", callback_group=self._cbg)
+        req = CommandBool.Request()
+        req.value = True
         try:
-            armService = rospy.ServiceProxy(
-                "mavros/cmd/arming", mavros_msgs.srv.CommandBool
-            )
-            armService(True)
-        except rospy.ServiceException as e:
-            print("Service arming call failed: %s" % e)
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"Service arming call failed: {e}")
 
     def setDisarm(self):
-        rospy.wait_for_service("mavros/cmd/arming")
+        client = self.node.create_client(CommandBool, "mavros/cmd/arming", callback_group=self._cbg)
+        req = CommandBool.Request()
+        req.value = False
         try:
-            armService = rospy.ServiceProxy(
-                "mavros/cmd/arming", mavros_msgs.srv.CommandBool
-            )
-            armService(False)
-        except rospy.ServiceException as e:
-            print("Service disarming call failed: %s" % e)
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"Service disarming call failed: {e}")
 
     def setStabilizedMode(self):
-        rospy.wait_for_service("mavros/set_mode")
+        client = self.node.create_client(SetMode, "mavros/set_mode", callback_group=self._cbg)
+        req = SetMode.Request()
+        req.custom_mode = "STABILIZED"
         try:
-            flightModeService = rospy.ServiceProxy(
-                "mavros/set_mode", mavros_msgs.srv.SetMode
-            )
-            flightModeService(custom_mode="STABILIZED")
-        except rospy.ServiceException as e:
-            print(
-                "service set_mode call failed: %s. Stabilized Mode could not be set."
-                % e
-            )
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"service set_mode call failed: {e}. Stabilized Mode could not be set.")
 
     def setOffboardMode(self):
-        rospy.wait_for_service("mavros/set_mode")
+        client = self.node.create_client(SetMode, "mavros/set_mode", callback_group=self._cbg)
+        req = SetMode.Request()
+        req.custom_mode = "OFFBOARD"
         try:
-            flightModeService = rospy.ServiceProxy(
-                "mavros/set_mode", mavros_msgs.srv.SetMode
-            )
-            flightModeService(custom_mode="OFFBOARD")
-        except rospy.ServiceException as e:
-            print(
-                "service set_mode call failed: %s. Offboard Mode could not be set." % e
-            )
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"service set_mode call failed: {e}. Offboard Mode could not be set.")
 
     def setAltitudeMode(self):
-        rospy.wait_for_service("mavros/set_mode")
+        client = self.node.create_client(SetMode, "mavros/set_mode", callback_group=self._cbg)
+        req = SetMode.Request()
+        req.custom_mode = "ALTCTL"
         try:
-            flightModeService = rospy.ServiceProxy(
-                "mavros/set_mode", mavros_msgs.srv.SetMode
-            )
-            flightModeService(custom_mode="ALTCTL")
-        except rospy.ServiceException as e:
-            print(
-                "service set_mode call failed: %s. Altitude Mode could not be set." % e
-            )
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"service set_mode call failed: {e}. Altitude Mode could not be set.")
 
     def setPositionMode(self):
-        rospy.wait_for_service("mavros/set_mode")
+        client = self.node.create_client(SetMode, "mavros/set_mode", callback_group=self._cbg)
+        req = SetMode.Request()
+        req.custom_mode = "POSCTL"
         try:
-            flightModeService = rospy.ServiceProxy(
-                "mavros/set_mode", mavros_msgs.srv.SetMode
-            )
-            flightModeService(custom_mode="POSCTL")
-        except rospy.ServiceException as e:
-            print(
-                "service set_mode call failed: %s. Position Mode could not be set." % e
-            )
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"service set_mode call failed: {e}. Position Mode could not be set.")
 
     def setAutoLandMode(self):
-        rospy.wait_for_service("mavros/set_mode")
+        client = self.node.create_client(SetMode, "mavros/set_mode", callback_group=self._cbg)
+        req = SetMode.Request()
+        req.custom_mode = "AUTO.LAND"
         try:
-            flightModeService = rospy.ServiceProxy(
-                "mavros/set_mode", mavros_msgs.srv.SetMode
-            )
-            flightModeService(custom_mode="AUTO.LAND")
-        except rospy.ServiceException as e:
-            print(
-                "service set_mode call failed: %s. Autoland Mode could not be set." % e
-            )
+            self._call_service_sync(client, req)
+        except Exception as e:
+            self.node.get_logger().error(f"service set_mode call failed: {e}. Autoland Mode could not be set.")
 
 
-class Controller:
+class Controller(Node):
     # initialization method
     def __init__(self):
+        super().__init__("setpoint_node")
+
         self.state = State()
         self.sp = PoseStamped()
         self.yaw_angle = Float32()
@@ -129,9 +146,9 @@ class Controller:
 
         self.imu = Imu()
 
-        self.sp.pose.position.x = 0
-        self.sp.pose.position.y = 0
-        self.sp.pose.position.z = 2
+        self.sp.pose.position.x = 0.0
+        self.sp.pose.position.y = 0.0
+        self.sp.pose.position.z = 2.0
 
         self.local_pos = PoseStamped()
         self.local_vel = TwistStamped()
@@ -140,71 +157,73 @@ class Controller:
         self.desVel = np.zeros(3)
         self.desAcc = np.zeros(3)
 
-        self.att_cmd = PoseStamped()
+        self.att_cmd = AttitudeTarget()
         self.thrust_cmd = Thrust()
 
         # Gains
         self.Lam = np.array([2.0, 2.0, 8.0])
-        self.Phi = np.array([1.5, 1.5, 1.5])
-        self.M_bar = 1
+        self.Phi = np.array([1.5, 1.5, 1.2])
+        self.M_bar = 0.45
         self.Kp0, self.alpha_0, self.v = (
             np.array([0.1, 0.1, 0.1]),
             np.array([1, 1, 1]),
             0.1,
         )
 
-        self.norm_thrust_const = 0.056
-        self.max_th = 16.0
+        self.norm_thrust_const =  0.08 #0.056
+        self.max_th = 12.0
         self.max_throttle = 0.96
         self.gravity = np.array([0, 0, 9.8])
-        self.pre_time = rospy.get_time()
+        self.pre_time = self.get_clock().now().nanoseconds * 1e-9
 
         self.armed = False
         self.command = AttitudeTarget()
         self.collective_thrust = 0.0
 
-        # Publishers
-        self.att_pub = rospy.Publisher(
-            "mavros/setpoint_attitude/attitude", PoseStamped, queue_size=10
-        )
-        self.thrust_pub = rospy.Publisher(
-            "mavros/setpoint_attitude/thrust", Thrust, queue_size=10
-        )
-        self.body_rate = rospy.Publisher(
-            "/mavros/setpoint_raw/attitude", AttitudeTarget, queue_size=10
-        )
+        # Publishers (ROS2 style)
+        # self.att_pub = self.create_publisher(PoseStamped, "mavros/setpoint_attitude/attitude", 10)
+        # self.thrust_pub = self.create_publisher(Thrust, "mavros/setpoint_attitude/thrust", 10)
+        self.att_pub = self.create_publisher(AttitudeTarget, "/mavros/setpoint_raw/attitude", 10)
 
+        # Observations / last values
         self.obs = None
         self.last_tau = np.array([0, 0, 0])
         self.last_vel = np.array([0, 0, 0])
         self.last_accel = np.array([0, 0, 0])
 
-        self.policy = Policy(config="experiment.yaml", use_ema=True, rng=42)
-        self.policy(jnp.ones((15,), dtype=jnp.float32))  # Warm up the JAX model
+        # Diffusion policy: unchanged
+        # self.policy = Policy(config="experiment.yaml", use_ema=True, rng=42)
+        # self.policy(jnp.ones((15,), dtype=jnp.float32))  # Warm up the JAX model
 
-    def base_link_pos(self, msg):
-        idx = msg.name.index("iris")
-        iris_pose = msg.pose[idx]
-        iris_twist = msg.twist[idx]
+    # callbacks to populate state
+    # def base_link_pos(self, msg: ModelStates):
+    #     try:
+    #         idx = msg.name.index("iris")
+    #     except ValueError:
+    #         # if model not found, just return
+    #         return
 
-        self.local_pos.pose.position.x = iris_pose.position.x
-        self.local_pos.pose.position.y = iris_pose.position.y
-        self.local_pos.pose.position.z = iris_pose.position.z
+    #     iris_pose = msg.pose[idx]
+    #     iris_twist = msg.twist[idx]
 
-        self.local_pos.pose.orientation.x = iris_pose.orientation.x
-        self.local_pos.pose.orientation.y = iris_pose.orientation.y
-        self.local_pos.pose.orientation.z = iris_pose.orientation.z
-        self.local_pos.pose.orientation.w = iris_pose.orientation.w
+    #     self.local_pos.pose.position.x = iris_pose.position.x
+    #     self.local_pos.pose.position.y = iris_pose.position.y
+    #     self.local_pos.pose.position.z = iris_pose.position.z
 
-        self.local_vel.twist.linear.x = iris_twist.linear.x
-        self.local_vel.twist.linear.y = iris_twist.linear.y
-        self.local_vel.twist.linear.z = iris_twist.linear.z
+    #     self.local_pos.pose.orientation.x = iris_pose.orientation.x
+    #     self.local_pos.pose.orientation.y = iris_pose.orientation.y
+    #     self.local_pos.pose.orientation.z = iris_pose.orientation.z
+    #     self.local_pos.pose.orientation.w = iris_pose.orientation.w
 
-        self.local_vel.twist.angular.x = iris_twist.angular.x
-        self.local_vel.twist.angular.y = iris_twist.angular.y
-        self.local_vel.twist.angular.z = iris_twist.angular.z
+    #     self.local_vel.twist.linear.x = iris_twist.linear.x
+    #     self.local_vel.twist.linear.y = iris_twist.linear.y
+    #     self.local_vel.twist.linear.z = iris_twist.linear.z
 
-    def posCb(self, msg):
+    #     self.local_vel.twist.angular.x = iris_twist.angular.x
+    #     self.local_vel.twist.angular.y = iris_twist.angular.y
+    #     self.local_vel.twist.angular.z = iris_twist.angular.z
+
+    def posCb(self, msg: PoseStamped):
         self.local_pos.pose.position.x = msg.pose.position.x
         self.local_pos.pose.position.y = msg.pose.position.y
         self.local_pos.pose.position.z = msg.pose.position.z
@@ -214,7 +233,7 @@ class Controller:
         self.local_pos.pose.orientation.z = msg.pose.orientation.z
         self.local_pos.pose.orientation.w = msg.pose.orientation.w
 
-    def velCb(self, msg):
+    def velCb(self, msg: TwistStamped):
         self.local_vel.twist.linear.x = msg.twist.linear.x
         self.local_vel.twist.linear.y = msg.twist.linear.y
         self.local_vel.twist.linear.z = msg.twist.linear.z
@@ -223,8 +242,12 @@ class Controller:
         self.local_vel.twist.angular.y = msg.twist.angular.y
         self.local_vel.twist.angular.z = msg.twist.angular.z
 
-    def multiDoFCb(self, msg):
+    def multiDoFCb(self, msg: Mdjt):
+        if not msg.points:
+            return
         pt = msg.points[0]
+        if not pt.transforms:
+            return
         self.sp.pose.position.x = pt.transforms[0].translation.x
         self.sp.pose.position.y = pt.transforms[0].translation.y
         self.sp.pose.position.z = pt.transforms[0].translation.z
@@ -243,7 +266,7 @@ class Controller:
             ]
         )
 
-    def stateCb(self, msg):
+    def stateCb(self, msg: State):
         self.state = msg
 
     def updateSp(self):
@@ -251,7 +274,7 @@ class Controller:
         self.sp.pose.position.y = self.local_pos.pose.position.y
         self.sp.pose.position.z = self.local_pos.pose.position.z
 
-    def accCB(self, msg):
+    def accCB(self, msg: Imu):
         self.imu.orientation.w = msg.orientation.w
         self.imu.orientation.x = msg.orientation.x
         self.imu.orientation.y = msg.orientation.y
@@ -265,9 +288,9 @@ class Controller:
         self.imu.linear_acceleration.y = msg.linear_acceleration.y
         self.imu.linear_acceleration.z = msg.linear_acceleration.z
 
-    def newPoseCB(self, msg):
+    def newPoseCB(self, msg: PoseStamped):
         if self.sp.pose.position != msg.pose.position:
-            print("New pose received")
+            self.get_logger().info("New pose received")
         self.sp.pose.position.x = msg.pose.position.x
         self.sp.pose.position.y = msg.pose.position.y
         self.sp.pose.position.z = msg.pose.position.z
@@ -277,14 +300,15 @@ class Controller:
         self.sp.pose.orientation.z = msg.pose.orientation.z
         self.sp.pose.orientation.w = msg.pose.orientation.w
 
-    def yawAngle(self, msg):
+    def yawAngle(self, msg: Float32):
         self.yaw_angle.data = msg.data
 
     def vector2Arrays(self, vector):
         return np.array([vector.x, vector.y, vector.z])
 
     def vector3Arrays(self, vector):
-        return np.array([vector.x, vector.y, vector.z, vector.w])
+        # keep same name, original returned 4-length (with .w) but used only for quaternions earlier
+        return np.array([vector.x, vector.y, vector.z, getattr(vector, "w", 0.0)])
 
     def array2Vector3(self, array, vector):
         vector.x = array[0]
@@ -348,7 +372,7 @@ class Controller:
     def a_des(self):
         _, accel = self.get_obs()
 
-        dt = rospy.get_time() - self.pre_time
+        dt = self.get_clock().now().nanoseconds * 1e-9 - self.pre_time
         self.pre_time = self.pre_time + dt
 
         if dt > 0.01:
@@ -365,8 +389,10 @@ class Controller:
         errAcc = curAcc - self.desAcc
 
         sv = errVel + np.multiply(self.Phi, errPos)
+        
         if self.armed:
-            self.Kp0 += (np.linalg.norm(sv) - np.multiply(self.alpha_0, self.Kp0)) * dt
+            self.Kp0 = (np.linalg.norm(sv) - np.multiply(self.alpha_0, self.Kp0)) * dt
+            # self.Kp0 += (sv - np.multiply(self.alpha_0, self.Kp0)) * dt
             self.Kp0 = np.maximum(self.Kp0, 0.0001 * np.ones(3))
         Rho = self.Kp0
         delTau = np.zeros(3)
@@ -376,14 +402,14 @@ class Controller:
 
         des_a = (
             -np.multiply(self.Lam, sv)
-            + self.M_bar * (self.desAcc - np.multiply(self.Phi, errVel))
-            + self.currN
+            + self.M_bar * (self.desAcc + self.gravity - np.multiply(self.Phi, errVel))
+            #+ self.currN
             - delTau
         )
 
-        print("N   :", self.currN)
-        print("errPos", errPos)
-        print("------------")
+        # self.get_logger().debug(f"N   : {self.currN}")
+        self.get_logger().debug(f"errPos {errPos}")
+        self.get_logger().debug("------------")
 
         if np.linalg.norm(des_a) > self.max_th:
             des_a = (self.max_th / np.linalg.norm(des_a)) * des_a
@@ -420,14 +446,14 @@ class Controller:
         )
         quat_des = quaternion_from_matrix(rot_44)
 
-        now = rospy.Time.now()
+        now = self.get_clock().now().to_msg()
         self.att_cmd.header.stamp = now
-        self.thrust_cmd.header.stamp = now
-        self.att_cmd.pose.orientation.x = quat_des[0]
-        self.att_cmd.pose.orientation.y = quat_des[1]
-        self.att_cmd.pose.orientation.z = quat_des[2]
-        self.att_cmd.pose.orientation.w = quat_des[3]
-        self.thrust_cmd.thrust = self.collective_thrust
+        self.att_cmd.orientation.x = quat_des[0]
+        self.att_cmd.orientation.y = quat_des[1]
+        self.att_cmd.orientation.z = quat_des[2]
+        self.att_cmd.orientation.w = quat_des[3]
+        self.att_cmd.thrust = float(self.collective_thrust)
+        self.att_cmd.type_mask = 7
 
     def acc2quat(self, des_a, des_yaw):
         proj_xb_des = np.array([np.cos(des_yaw), np.sin(des_yaw), 0.0])
@@ -435,81 +461,107 @@ class Controller:
             zb_des = np.array([0, 0, 1])
         else:
             zb_des = des_a / np.linalg.norm(des_a)
-        yb_des = np.cross(zb_des, proj_xb_des) / np.linalg.norm(
-            np.cross(zb_des, proj_xb_des)
-        )
-        xb_des = np.cross(yb_des, zb_des) / np.linalg.norm(np.cross(yb_des, zb_des))
+        # ensure cross products are safe (avoid zero division)
+        cross_y = np.cross(zb_des, proj_xb_des)
+        if np.linalg.norm(cross_y) == 0:
+            # fallback orthogonal vector
+            if abs(zb_des[2]) < 0.9:
+                cross_y = np.cross(zb_des, np.array([0, 0, 1.0]))
+            else:
+                cross_y = np.cross(zb_des, np.array([0, 1.0, 0]))
+        yb_des = cross_y / np.linalg.norm(cross_y)
+        xb_des = np.cross(yb_des, zb_des)
+        xb_des = xb_des / np.linalg.norm(xb_des)
 
         rotmat = np.transpose(np.array([xb_des, yb_des, zb_des]))
         return rotmat
 
     def pub_att(self):
         self.geo_con_()
-        self.thrust_pub.publish(self.thrust_cmd)
+        # self.thrust_pub.publish(self.thrust_cmd)
         self.att_pub.publish(self.att_cmd)
 
 
-# Main function
 def main(argv):
-
-    rospy.init_node("setpoint_node", anonymous=True)
-    modes = fcuModes()  # flight modes
-    cnt = Controller()  # controller object
-    rate = rospy.Rate(30)
-    rospy.Subscriber("mavros/state", State, cnt.stateCb)
-    rospy.Subscriber("/gazebo/model_states", ModelStates, cnt.base_link_pos)
-
-    # rospy.Subscriber('mavros/local_position/pose', PoseStamped, cnt.posCb)
-    # rospy.Subscriber('mavros/local_position/velocity_local', TwistStamped, cnt.velCb)
-    rospy.Subscriber("mavros/imu/data", Imu, cnt.accCB)
-
-    rospy.Subscriber("command/trajectory", Mdjt, cnt.multiDoFCb)
-    rospy.Subscriber("new_pose", PoseStamped, cnt.newPoseCB)
-    rospy.Subscriber("yaw_in_deg", Float32, cnt.yawAngle)
-    sp_pub = rospy.Publisher(
-        "mavros/setpoint_position/local", PoseStamped, queue_size=10
+    rclpy.init(args=argv)
+    node = Controller()
+    modes = fcuModes(node)
+    qos = QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10
     )
 
-    print("ARMING")
+    # create subscriptions (mimic original ROS1 behavior)
+    node.create_subscription(State, "/mavros/state", node.stateCb, 10)
+    # node.create_subscription(ModelStates, "/gazebo/model_states", node.base_link_pos, 10)
+    node.create_subscription(Imu, "/mavros/imu/data", node.accCB, qos)
+    node.create_subscription(PoseStamped, "/mavros/local_position/pose", node.posCb, qos)
+    node.create_subscription(TwistStamped, "/mavros/local_position/velocity_local", node.velCb, qos)
+    node.create_subscription(Mdjt, "/command/trajectory", node.multiDoFCb, 10)
+    node.create_subscription(PoseStamped, "new_pose", node.newPoseCB, 10)
+    node.create_subscription(Float32, "yaw_in_deg", node.yawAngle, 10)
 
-    while not cnt.state.armed:
-        modes.setArm()
-        cnt.armed = True
-        rate.sleep()
+    # setpoint position publisher (used in arming phase)
+    sp_pub = node.create_publisher(PoseStamped, "/mavros/setpoint_position/local", 10)
 
-    cnt.armed = True
+    node.get_logger().info("ARMING")
+
+    # attempt to arm until armed; mimics original loop (note: may be aggressive)
+    while not node.state.armed and rclpy.ok():
+        try:
+            modes.setArm()
+            node.armed = True
+        except Exception as e:
+            node.get_logger().warn(f"Arm attempt failed: {e}")
+        # process callbacks
+        # rclpy.spin_once(node, timeout_sec=0.1)
+
+    node.armed = True
     k = 0
 
-    while k < 20:
-        sp_pub.publish(cnt.sp)
-        rate.sleep()
-        k = k + 1
+    # publish a few setpoints before switching to offboard (as originally)
+    # rate = node.create_rate(30)
+    while k < 20 and rclpy.ok():
+        sp_pub.publish(node.sp)
+        rclpy.spin_once(node, timeout_sec=1.0 / 30.0)
+        k += 1
 
-    modes.setOffboardMode()
-    print("---------")
-    print("OFFBOARD")
-    print("---------")
+    try:
+        modes.setOffboardMode()
+        node.get_logger().info("---------")
+        node.get_logger().info("OFFBOARD")
+        node.get_logger().info("---------")
+    except Exception as e:
+        node.get_logger().error(f"Failed to set offboard: {e}")
 
-    # ROS main loop
+    # Main loop
     i = 0
     PLANNING_BUDGET = 8
 
-    while not rospy.is_shutdown():
+    try:
+        while rclpy.ok():
+            # if i % PLANNING_BUDGET == 0:
+            #     obs = node.get_obs()[0]
+            #     action = node.policy(obs)
 
-        if i % PLANNING_BUDGET == 0:
-            obs = cnt.get_obs()[0]
-            action = cnt.policy(obs)
+            # for j in range(PLANNING_BUDGET):
+            #     curr_act = action[j]
+            #     node.get_action(curr_act)
 
-        for j in range(PLANNING_BUDGET):
-            curr_act = action[j]
-            cnt.get_action(curr_act)
+                node.pub_att()
+                # rclpy.spin_once(node, timeout_sec=1.0 / 30.0)
+                # allow callbacks to run
+                rclpy.spin_once(node, timeout_sec=0.0)
 
-            cnt.pub_att()
-            rate.sleep()
+            # i += 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.get_logger().info("Shutting down node")
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
-    try:
-        main(sys.argv[1:])
-    except rospy.ROSInterruptException:
-        pass
+    main(sys.argv)

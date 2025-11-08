@@ -49,13 +49,13 @@ def train_step(
     )
 
     # Accumulate gradients
-    accum = jax.tree_map(lambda a, g: a + g, state.grad_accum, grads)
+    accum = jax.tree.map(lambda a, g: a + g, state.grad_accum, grads)
     count = state.grad_accum_count + 1
 
     # Decide whether to apply accumulated gradients
     if count >= state.grad_accum_steps:
         # Scale grads down by the number of accumulation steps
-        scaled = jax.tree_map(lambda g: g / state.grad_accum_steps, accum)
+        scaled = jax.tree.map(lambda g: g / state.grad_accum_steps, accum)
         # Apply optimizer updates
         new_state = state.apply_gradients(grads=scaled)
 
@@ -72,7 +72,7 @@ def train_step(
         new_ema = jax.lax.cond(do_ema, do_fn, lambda e: e, new_state.ema_params)
 
         # reset accumulation
-        zero = jax.tree_map(jnp.zeros_like, state.grad_accum)
+        zero = jax.tree.map(jnp.zeros_like, state.grad_accum)
         state = new_state.replace(
             ema_params=new_ema,
             grad_accum=zero,
